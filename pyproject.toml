@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=65.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "robot_framework"
+version = "0.1.0"
+authors = [
+  { name="ITK Development", email="itk-rpa@mkb.aarhus.dk" },
+]
+readme = "README.md"
+requires-python = ">=3.11"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Microsoft :: Windows",
+]
+dependencies = [
+    "OpenOrchestrator == 3.*",
+    "requests >= 2.31",
+    # App-only Graph with a certificate. MSAL signs the assertion with the private
+    # key named by the KontAKTCert credential; nothing else here needs crypto.
+    "msal >= 1.31",
+    # error_screenshot.py grabs the screen with PIL when a run fails.
+    "Pillow == 10.*",
+]
+# NOTE: no oomtm, no LibreOffice, no cryptography. This robot moves mail and
+# nothing else: it reads the shared mailbox, hands what it finds to KontAKT, and
+# sends what KontAKT asks it to send. Journalising a mail to GO is a separate
+# queue element on KontAKTJournalize, which owns the GO connection.
+#
+# robot_framework/graph_mail.py is a COPY of KontAKT/tools/graph_mail.py, which is
+# where the matching logic is developed and tested against the real mailbox
+# (tools/graph_sandbox.py). Keep the two in step.
+
+[project.optional-dependencies]
+dev = [
+  "pylint",
+  "flake8"
+]
