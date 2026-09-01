@@ -48,3 +48,14 @@ def close_all(orchestrator_connection: OrchestratorConnection) -> None:
     no application to shut down and no window to close.
     """
     orchestrator_connection.log_trace("Closing applications.")
+
+
+def kill_all(orchestrator_connection: OrchestratorConnection) -> None:
+    """Forcefully close all applications used by the robot.
+
+    Empty for the same reason as close_all - this robot opens no application, only
+    HTTP sessions. It has to exist all the same: queue_framework calls it in its
+    final teardown, and a missing name there fails the whole run AFTER the work is
+    done, which reads as a broken robot when nothing broke.
+    """
+    orchestrator_connection.log_trace("Killing all applications.")
