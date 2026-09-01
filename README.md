@@ -90,21 +90,38 @@ test med Outlook og fejle i praksis.
 
 `.pem`-filen skal ligge på **samme sti på hver robotmaskine**.
 
-**Kø:** `KontAKTMail`. KontAKT lægger selv elementer i den, når en sagsbehandler
-sender en besked. Bemærk `QUEUE_ATTEMPTS = 1` - modsat de andre KontAKT-robotter.
-En genkørsel efter en afsendelse, der faktisk lykkedes, lægger en kopi mere i
-ansøgerens indbakke, og den kan ikke kaldes tilbage. Fejlen skrives i stedet på
-beskeden (`case_emails.send_error`) og vises i tråden.
-
-**Trigger:** et planlagt job, der kører hvert minut med procesargumentet
+**Kun ÉN trigger.** Et planlagt job, der kører hvert minut med procesargumentet
 
 ```json
 {"mode": "poll"}
 ```
 
-Uden det argument læses postkassen ikke - robotten sender kun det, der ligger i
-køen. Da ingen holder øje med postkassen, er en trigger, der stille er blevet
-slået fra, den fejl, der ville tage længst tid at opdage.
+Der skal **ikke** oprettes en kø-trigger ved siden af. Når det planlagte job
+fyrer, læser robotten først postkassen, og løber derefter kø-løkken, som tømmer
+alt hvad KontAKT har lagt i køen - og afslutter så. Ét minutligt job dækker
+altså begge veje, og der er ingen proces, der kører konstant.
+
+Uden procesargumentet læses postkassen ikke - så sender robotten kun det, der
+ligger i køen. Da ingen holder øje med postkassen, er en trigger, der stille er
+blevet slået fra, den fejl, der ville tage længst tid at opdage.
+
+**Kø:** `KontAKTMail` skal oprettes, så KontAKT har et sted at lægge elementerne
+- den skal bare ikke have sin egen trigger. Bemærk `QUEUE_ATTEMPTS = 1`, modsat
+de andre KontAKT-robotter: en genkørsel efter en afsendelse, der faktisk
+lykkedes, lægger en kopi mere i ansøgerens indbakke, og den kan ikke kaldes
+tilbage. Fejlen skrives i stedet på beskeden (`case_emails.send_error`) og vises
+i tråden.
+
+**To ting at holde øje med ved et minutligt job**
+
+`main.py` kører `pip install --upgrade uv` ved hver start. Ved den her kadence
+bliver det 1440 netværkskald i døgnet. Det er hustemplatets opførsel og gør
+ingen skade, men det er værd at vide, hvis nogen undrer sig over trafikken.
+
+En kørsel med tunge vedhæftninger kan tage længere end et minut. `MAX_TASK_COUNT`
+(50) og `POLL_BATCH` (50) holder én kørsel afgrænset, så en ophobning drænes over
+flere kørsler i stedet for i én lang. Sæt dem lavere, hvis kørslerne begynder at
+overlappe.
 
 ## Afhængigheder
 
