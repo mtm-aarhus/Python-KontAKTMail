@@ -275,21 +275,27 @@ class Mailbox:
         if cc:
             message["ccRecipients"] = _people(cc)
 
-        # In-Reply-To and References are what make the applicant's mail client show
-        # this inside the existing conversation instead of as a mail out of
-        # nowhere - and what makes their reply carry our id back to us. Graph will
-        # not let us set them through the normal fields, but it does accept them as
-        # internet headers on a draft.
-        wire = dict(headers or {})
+        # Graph refuses any internetMessageHeader whose name does not start with
+        # "x-": setting In-Reply-To that way answers 400 InvalidInternetMessageHeader
+        # and nothing is sent. So threading is done the only way Graph allows -
+        # by asking it to build a reply to the original message, which makes
+        # Exchange write In-Reply-To, References and the conversation id itself.
+        #
+        # If we cannot find the message being answered (it was deleted, or it was
+        # sent over SMTP before the mailbox existed), the mail still goes out as a
+        # fresh one. It is worth being clear about what that costs and what it does
+        # not: the applicant's client may show it outside the thread, but OUR
+        # matching is unaffected - their reply carries the Message-ID of whatever
+        # we sent, and that is the id we store and look up.
+        wire = {k: v for k, v in (headers or {}).items() if k.lower().startswith("x-")}
+        draft = None
         if in_reply_to:
-            wire["In-Reply-To"] = in_reply_to
-        if references:
-            wire["References"] = references
-        if wire:
-            message["internetMessageHeaders"] = [
-                {"name": k, "value": v} for k, v in wire.items()]
-
-        draft = self._call("POST", self._user("/messages"), json=message)
+            draft = self._reply_draft(in_reply_to, message, wire)
+        if draft is None:
+            if wire:
+                message["internetMessageHeaders"] = [
+                    {"name": k, "value": v} for k, v in wire.items()]
+            draft = self._call("POST", self._user("/messages"), json=message)
         message_id = draft.get("internetMessageId") or ""
 
         # Attachments go on the draft, one call each. Graph caps a simple upload at
@@ -302,6 +308,62 @@ class Mailbox:
 
         self._call("POST", self._user(f"/messages/{draft['id']}/send"))
         return message_id
+
+    def find_by_message_id(self, message_id: str) -> Optional[dict]:
+        """The mailbox item carrying this Message-ID, anywhere in the mailbox.
+
+        Searched across all folders rather than just the inbox: the mail we are
+        answering has usually been filed into "KontAKT - på sag" by the time a
+        caseworker gets round to replying.
+        """
+        mid = (message_id or "").strip()
+        if not mid:
+            return None
+        quoted = mid.replace("'", "''")
+        try:
+            found = self._call("GET", self._user(
+                f"/messages?$filter=internetMessageId eq '{quoted}'"
+                f"&$select=id,conversationId&$top=1")).get("value") or []
+        except RuntimeError:
+            return None
+        return found[0] if found else None
+
+    def _reply_draft(self, in_reply_to: str, message: dict,
+                     extra_headers: dict) -> Optional[dict]:
+        """A draft Exchange itself threaded onto the original, or None.
+
+        createReply gives us the threading headers we are not allowed to write,
+        and then the draft is overwritten with our own subject, body and
+        recipients - the quoted original it prefills is not wanted, because
+        KontAKT already shows the whole conversation on the case.
+        """
+        original = self.find_by_message_id(in_reply_to)
+        if original is None:
+            self.log(f"Fandt ikke {in_reply_to} i postkassen - sender uden tråd")
+            return None
+        try:
+            draft = self._call("POST", self._user(
+                f"/messages/{original['id']}/createReply"))
+            # Only what a draft actually accepts on a PATCH.
+            # internetMessageHeaders is NOT in that set - Graph answers
+            # "ErrorInvalidPropertySet" - because headers can only be written
+            # when the message is created. No loss: our own X- header was never
+            # a matching strategy, since almost no client echoes an unknown
+            # header back on a reply. The threading, which is what we came for,
+            # is already on the draft.
+            #
+            # AND NOT THE SUBJECT. Exchange derives the conversation from the
+            # subject, so overwriting it puts the reply in a new thread - which
+            # is the one thing this whole path exists to avoid. The subject
+            # createReply chose is "RE: <the original>", and since every mail we
+            # send carries [KontAKT #35], the tag is already in it.
+            patch = {k: v for k, v in message.items()
+                     if k in ("body", "toRecipients", "ccRecipients")}
+            return self._call("PATCH", self._user(f"/messages/{draft['id']}"),
+                              json=patch)
+        except RuntimeError as exc:
+            self.log(f"Kunne ikke svare i tråden ({exc}) - sender uden tråd")
+            return None
 
     def _attach(self, draft_id: str, name: str, data: bytes,
                 content_type: Optional[str] = None) -> None:

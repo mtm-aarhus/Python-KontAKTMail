@@ -36,24 +36,32 @@ class _TriggerElement:
 
 
 def _poll_requested(orchestrator_connection) -> bool:
-    """Did the trigger ask for the mailbox to be read?
+    """Should this run read the mailbox? Yes, unless it is explicitly told not to.
 
-    Accepts both the JSON the queue payloads use and the bare word, because that
-    field is typed by hand into the trigger and a stray brace should not quietly
-    stop the mailbox being read for months. Nobody is watching that mailbox, so a
-    silently disabled poll is the failure that would take longest to notice.
+    THE DEFAULT IS ON, AND THAT IS THE WHOLE POINT. It used to require
+    ``{"mode": "poll"}`` in the trigger's process arguments, and that failed
+    exactly as badly as it could: a queue trigger carries no process arguments, so
+    the robot sent mail perfectly while never once reading the inbox. Nothing
+    errored, the runs were green, and four replies sat in the mailbox for a day.
+
+    Nobody watches that mailbox. So a missing or mistyped argument must mean "read
+    it anyway" - the cost of an unnecessary read is one Graph call, and the cost of
+    a silently skipped read is an applicant who never hears back.
+
+    Say ``{"mode": "send-only"}`` to turn it off deliberately.
     """
     raw = (getattr(orchestrator_connection, "process_arguments", None) or "").strip()
     if not raw:
+        return True
+    lowered = raw.lower()
+    if "send-only" in lowered or "send_only" in lowered:
         return False
     try:
-        return (json.loads(raw) or {}).get("mode") == "poll"
+        return (json.loads(raw) or {}).get("mode") != "send-only"
     except (ValueError, AttributeError):
-        # Not valid JSON - a hand-typed word, or a brace that got lost. Only the
-        # unparseable case lands here, so looking for the word is safe: anything that
-        # DID parse was already answered above, and this field never carries another
-        # mode. 'send' comes from the queue, never from a trigger.
-        return "poll" in raw.lower()
+        # Not valid JSON - a hand-typed word, or a brace that got lost. Anything
+        # we cannot read means we read the mailbox, for the reason above.
+        return True
 
 
 def main():

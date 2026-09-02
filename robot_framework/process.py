@@ -203,7 +203,11 @@ def _poll(oc, client: Client) -> None:
         # part, and most of what a shared mailbox receives never needs it.
         msg = box.message(gid)
         text, html = _body_of(msg)
-        atts = [a for a in box.attachments(gid) if not a.get("isInline")]
+        # Indlejrede billeder tages MED. De taelles ikke som vedhaeftninger, men
+        # uden dem staar der et brudt billede midt i ansoegerens tekst, hver gang
+        # nogen aabner sagen - typisk et signaturlogo eller et skaermbillede, der
+        # var hele pointen med mailen.
+        atts = box.attachments(gid)
 
         answer = _post(client, "/api/v1/mail/inbound", {
             "message_id": (msg.get("internetMessageId") or "")[:255],
@@ -220,12 +224,17 @@ def _poll(oc, client: Client) -> None:
             "received_at": msg.get("receivedDateTime"),
             "attachments": [{"name": a.get("name"),
                              "content_type": a.get("contentType"),
-                             "size_bytes": a.get("size")} for a in atts],
+                             "size_bytes": a.get("size"),
+                             "content_id": a.get("contentId"),
+                             "is_inline": bool(a.get("isInline")),
+                             "graph_id": a.get("id")} for a in atts],
         })
 
         action = answer.get("action")
         if action == "stored":
             oc.log_info(f"På sag {answer.get('case_id')}: {answer.get('reason')}")
+            if not answer.get("duplicate"):
+                _upload_attachments(oc, client, box, gid, answer)
             _notify(oc, answer)
             box.move(gid, handled)
             counts["paa_sag"] += 1
@@ -248,6 +257,38 @@ def _poll(oc, client: Client) -> None:
                 + ", ".join(f"{k}={v}" for k, v in counts.items()))
 
 
+def _upload_attachments(oc, client: Client, box, gid: str, answer: dict) -> None:
+    """Hent hver vedhæftnings bytes ned og aflever dem til KontAKT.
+
+    Metadata kom med, da mailen blev afleveret; filerne kommer bagefter, én ad
+    gangen. Uden det her skridt kender KontAKT navnet paa det, ansoegeren sendte,
+    og har ikke filen - hvilket er vaerre end ingenting, fordi det ser ud som om
+    dokumentet er der.
+
+    En fil, der fejler, stopper ikke resten: mailen selv er allerede paa sagen,
+    og en enkelt vedhaeftning der mangler er bedre end en mail der ikke kom ind.
+    """
+    case_id = answer.get("case_id")
+    email_id = answer.get("email_id")
+    for att in (answer.get("attachments") or []):
+        graph_id, kontakt_id = att.get("graph_id"), att.get("id")
+        if not graph_id or not kontakt_id:
+            continue
+        try:
+            data = box.attachment_bytes(gid, graph_id)
+            if not data:
+                oc.log_info(f"Vedhæftning {kontakt_id} var tom - springer over")
+                continue
+            r = client.kontakt.post(
+                f"{client.kontakt_base}/api/v1/cases/{case_id}/emails/{email_id}"
+                f"/attachments/{kontakt_id}/file",
+                data=data, timeout=600,
+                headers={"Content-Type": "application/octet-stream"})
+            r.raise_for_status()
+        except Exception as exc:                                        # noqa: BLE001
+            oc.log_info(f"Kunne ikke hente vedhæftning {kontakt_id}: {exc!r}")
+
+
 def _autoreply(oc, client: Client, answer: dict, original: dict) -> None:
     """Tell a stranger where their request actually belongs.
 
@@ -256,13 +297,22 @@ def _autoreply(oc, client: Client, answer: dict, original: dict) -> None:
     never written to. Auto-Submitted marks it as machine-written, which is what
     keeps a well-behaved autoresponder at the other end from answering us back.
     """
+    # Only X- headers survive: Graph rejects any other name outright, so
+    # Auto-Submitted (RFC 3834) cannot be set from here however much we would
+    # like to. X-Auto-Response-Suppress is the one Exchange itself reads, and it
+    # is what stops an out-of-office bouncing back at us from a mailbox on this
+    # tenant.
+    #
+    # For everyone else the protection is the incoming side, not the outgoing
+    # one: their autoresponder's answer arrives carrying its OWN Auto-Submitted,
+    # and should_ignore drops it. So a loop still cannot get going - we simply
+    # cannot ask the other end to be polite in advance.
     client.box.send(
         to=answer["to"],
         subject=answer["subject"],
         body=answer["body"],
         in_reply_to=original.get("internetMessageId"),
-        headers={"Auto-Submitted": "auto-replied",
-                 "X-Auto-Response-Suppress": "All"},
+        headers={"X-Auto-Response-Suppress": "All"},
     )
 
 
