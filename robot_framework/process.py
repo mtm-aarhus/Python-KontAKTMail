@@ -112,8 +112,13 @@ def _send_one(oc, client: Client, payload: dict) -> None:
     email_id = int(payload["email_id"])
     path = f"/api/v1/mail/outbound/{email_id}"
 
+    # RESERVÉR FØRST. Der kan findes to køelementer for den samme besked - en
+    # sagsbehandler trykker "Send igen", og nogen genkører samtidig det gamle
+    # element i OpenOrchestrator. KontAKT afgør med én atomisk UPDATE, hvem der
+    # har beskeden; den anden får "skip" og rører den ikke. Uden det ville
+    # ansøgeren få den samme mail to gange, og det kan ikke gøres om.
     try:
-        item = _get(client, path)
+        item = _post(client, f"{path}/claim", {})
     except requests.HTTPError as exc:
         if exc.response is not None and exc.response.status_code == 404:
             oc.log_info(f"Mail {email_id} findes ikke længere - beskeden er slettet")
@@ -122,6 +127,9 @@ def _send_one(oc, client: Client, payload: dict) -> None:
 
     if item.get("already_sent"):
         oc.log_info(f"Mail {email_id} er allerede sendt - springer over")
+        return
+    if item.get("skip"):
+        oc.log_info(f"Mail {email_id}: {item.get('reason')} - springer over")
         return
 
     attachments = []
