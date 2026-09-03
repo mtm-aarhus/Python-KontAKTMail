@@ -12,6 +12,17 @@ two credentials, two fields each):
 
 The mailbox address is neither secret nor changing, so it is a plain constant.
 
+DEN HER FIL KOPIERES UD I ROBOTTEN
+    En OO-robot installeres som sit eget lille repo paa robotmaskinen og kan
+    ikke importere fra KontAKT, saa `robot_framework/graph_mail.py` er en KOPI
+    af den her fil. Retter du noget her, skal den kopieres ud igen - ellers
+    kalder robotten noget, dens egen kopi ikke kender.
+
+    Det er sket: 2026-09-03 fik `send()` argumenterne `content_id` og `inline`,
+    kopien blev glemt, og hver eneste afsendelse fejlede med TypeError - mens
+    signaturlogoet gik ud som en almindelig vedhaeftning. `tests/test_copies.py`
+    fanger det nu.
+
 WHY THE MATCHING IS BUILT THE WAY IT IS
     An e-mail has to land on the right aktindsigt, and the same person can easily
     have several running at once - so the sender's address is worthless on its own.
@@ -199,9 +210,21 @@ class Mailbox:
             f"/messages/{message_id}?$select={SELECT},body"))
 
     def attachments(self, message_id: str) -> list[dict]:
+        """Filerne paa en mail - med contentId, som er hele pointen.
+
+        INTET ``$select`` HER, OG DET ER MED VILJE. ``contentId`` findes ikke paa
+        basistypen ``microsoft.graph.attachment``, saa Graph afviser hele kaldet
+        med 400 "Could not find a property named 'contentId'" hvis man beder om
+        det - og udelader man det bare fra listen, kommer feltet ikke med, og saa
+        er der ingenting at koble ``cid:``-henvisningerne i broedteksten til.
+        Resultatet var et brudt billede midt i hver mail med et indlejret logo.
+
+        Uden ``$select`` kommer alle felter, contentId iberegnet. Det koster
+        ``contentBytes`` med i svaret, saa listen hentes kun én gang pr. mail -
+        og bytes hentes alligevel bagefter for hver fil, der skal gemmes.
+        """
         return self._call("GET", self._user(
-            f"/messages/{message_id}/attachments"
-            f"?$select=id,name,contentType,size,isInline")).get("value", [])
+            f"/messages/{message_id}/attachments")).get("value", [])
 
     def attachment_bytes(self, message_id: str, attachment_id: str) -> bytes:
         att = self._call("GET", self._user(
@@ -304,7 +327,9 @@ class Mailbox:
         # that carries the rest.
         for att in (attachments or []):
             self._attach(draft["id"], att["name"], att["bytes"],
-                         att.get("content_type"))
+                         att.get("content_type"),
+                         content_id=att.get("content_id"),
+                         inline=bool(att.get("is_inline")))
 
         self._call("POST", self._user(f"/messages/{draft['id']}/send"))
         return message_id
@@ -366,13 +391,22 @@ class Mailbox:
             return None
 
     def _attach(self, draft_id: str, name: str, data: bytes,
-                content_type: Optional[str] = None) -> None:
+                content_type: Optional[str] = None, *,
+                content_id: Optional[str] = None, inline: bool = False) -> None:
+        """En fil paa kladden. ``inline`` er signaturlogoet og lignende: det
+        vises inde i brødteksten via ``cid:<content_id>`` og skal ikke staa som
+        en vedhaeftning, modtageren kan hente."""
         if len(data) <= 3 * 1024 * 1024:
+            body = {"@odata.type": "#microsoft.graph.fileAttachment",
+                    "name": name,
+                    "contentType": content_type or "application/octet-stream",
+                    "contentBytes": base64.b64encode(data).decode()}
+            if content_id:
+                body["contentId"] = content_id
+            if inline:
+                body["isInline"] = True
             self._call("POST", self._user(f"/messages/{draft_id}/attachments"),
-                       json={"@odata.type": "#microsoft.graph.fileAttachment",
-                             "name": name,
-                             "contentType": content_type or "application/octet-stream",
-                             "contentBytes": base64.b64encode(data).decode()})
+                       json=body)
             return
 
         session = self._call(
