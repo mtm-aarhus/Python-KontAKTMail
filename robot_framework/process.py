@@ -145,7 +145,9 @@ def _send_one(oc, client: Client, payload: dict) -> None:
             return
         r.raise_for_status()
         attachments.append({"name": att["name"], "bytes": r.content,
-                            "content_type": att.get("content_type")})
+                            "content_type": att.get("content_type"),
+                            "content_id": att.get("content_id"),
+                            "is_inline": att.get("is_inline")})
 
     oc.log_info(f"Sender mail {email_id} til {item.get('to')} "
                 f"({len(attachments)} vedhæftninger)")
