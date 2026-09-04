@@ -358,9 +358,10 @@ class Mailbox:
         """A draft Exchange itself threaded onto the original, or None.
 
         createReply gives us the threading headers we are not allowed to write,
-        and then the draft is overwritten with our own subject, body and
-        recipients - the quoted original it prefills is not wanted, because
-        KontAKT already shows the whole conversation on the case.
+        and then the draft is overwritten with our own body and recipients (not
+        the subject - see below) - the quoted original it prefills is not
+        wanted, because KontAKT already shows the whole conversation on the
+        case. Nor are the FILES it prefills: see _drop_prefilled.
         """
         original = self.find_by_message_id(in_reply_to)
         if original is None:
@@ -384,11 +385,54 @@ class Mailbox:
             # send carries [KontAKT #35], the tag is already in it.
             patch = {k: v for k, v in message.items()
                      if k in ("body", "toRecipients", "ccRecipients")}
-            return self._call("PATCH", self._user(f"/messages/{draft['id']}"),
-                              json=patch)
+            patched = self._call("PATCH", self._user(f"/messages/{draft['id']}"),
+                                 json=patch)
         except RuntimeError as exc:
             self.log(f"Kunne ikke svare i tråden ({exc}) - sender uden tråd")
             return None
+        # Efter brødteksten er skiftet, og ikke før: se _drop_prefilled.
+        self._drop_prefilled(draft["id"])
+        return patched
+
+    def _drop_prefilled(self, draft_id: str) -> None:
+        """Ryd de filer, createReply har arvet fra den mail, vi svarer på.
+
+        DET HER ER GRUNDEN: createReply kopierer den oprindelige mails
+        INDLEJREDE filer med over på kladden, og vores eget logo har et fast
+        content-id. Efter det første svar i en tråd ligger der derfor to filer
+        med cid ``aak-logo``: den arvede fra sidst og den, vi selv lægger på.
+        Mailklienten viser den FØRSTE - altså den gamle. I én tråd her overlevede
+        en logofil fra dagen før to udskiftninger af filen på disken, og for
+        hvert svar kom der en kopi mere med.
+
+        Det er sikkert at rydde dem ALLE: PATCH'en lige ovenfor har netop
+        erstattet kladdens brødtekst med vores egen, så det citerede svar, der
+        henviste til filerne, findes ikke længere. Ingenting peger på dem
+        bagefter - de ville kun ligge og fylde i hver mail, vi sender.
+
+        ``$select=id,name`` er med vilje: uden det svarer Graph med contentBytes
+        for hver fil, og et indlejret skærmbillede fra en ansøger kan være
+        megabytes. ``contentId`` må IKKE staa der - det findes ikke på
+        basistypen, og hele kaldet ville fejle - men det skal det heller ikke,
+        for her ryddes alt.
+
+        Går det galt, sendes mailen alligevel. Et forkert logo kan man leve med;
+        en besked, der ikke kommer af sted, kan man ikke.
+        """
+        try:
+            arvet = self._call("GET", self._user(
+                f"/messages/{draft_id}/attachments?$select=id,name")).get("value", [])
+        except RuntimeError as exc:
+            self.log(f"Kunne ikke se kladdens arvede filer ({exc}) - sender alligevel")
+            return
+        for att in arvet:
+            try:
+                self._call("DELETE", self._user(
+                    f"/messages/{draft_id}/attachments/{att['id']}"))
+                self.log(f"Fjernede arvet fil {att.get('name')!r} fra svarkladden")
+            except RuntimeError as exc:
+                self.log(f"Kunne ikke fjerne {att.get('name')!r} ({exc}) "
+                         "- sender alligevel")
 
     def _attach(self, draft_id: str, name: str, data: bytes,
                 content_type: Optional[str] = None, *,
