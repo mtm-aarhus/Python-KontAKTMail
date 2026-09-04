@@ -559,8 +559,8 @@ def should_ignore(msg: dict, mailbox: str = "") -> Optional[str]:
     """Why this mail must be passed over in silence - or None to handle it.
 
     THIS IS THE MAIL-LOOP GUARD, and it is the reason KontAKT is allowed to answer
-    strangers at all. An unmatched mail gets an automatic "write to post@mtm
-    instead" reply; if the thing we answered was itself a machine, its answer comes
+    strangers at all. An unmatched mail gets an automatic "here is where a request
+    belongs" reply; if the thing we answered was itself a machine, its answer comes
     back, and two robots can bounce a message between them until someone notices.
     Every rule below exists to make sure the automatic reply only ever reaches a
     human being.
@@ -643,9 +643,10 @@ def classify(msg: dict, mailbox: str = "") -> Match:
       afvis       a human, but nothing ties it to a case
 
     ``afvis`` does NOT create a case. This mailbox is for correspondence on cases
-    that already exist; new requests belong on the self-service form or at
-    post@mtm.aarhus.dk, and the robot answers with exactly that. Nobody reads this
-    mailbox, so a mail we cannot place must not be left lying there in silence.
+    that already exist; new requests belong on aarhus.dk's aktindsigt page (see
+    app/mail_inbound.AKTINDSIGT_URL), and the robot answers with exactly that.
+    Nobody reads this mailbox, so a mail we cannot place must not be left lying
+    there in silence.
     """
     why = should_ignore(msg, mailbox)
     if why:
