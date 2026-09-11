@@ -15,14 +15,25 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: Microsoft :: Windows",
 ]
+# HVER VERSION ER LAAST, OG DET ER EN SIKKERHEDSREGEL - IKKE PEDANTERI.
+# Robotten installerer sine afhaengigheder ved HVER koersel. Med ">=" henter den
+# den nyeste udgave paa PyPI i samme oejeblik, den koerer - saa en kapret eller
+# kompromitteret pakke rammer robotmaskinen uden at nogen har besluttet noget.
+# Et "==" betyder, at en ny version er en beslutning, nogen traeffer.
+#
+# cryptography staar IKKE her: den kommer med OpenOrchestrator, som pinner den
+# selv (==45.0.*). To steder at bestemme den version er ét for mange.
+#
+# oomtm peger paa en COMMIT og ikke paa "main". Vi vedligeholder selv oomtm, men
+# en gren flytter sig - og saa er det ikke laengere laast. En commit er.
 dependencies = [
     "OpenOrchestrator == 3.*",
-    "requests >= 2.31",
+    "requests == 2.34.2",
     # App-only Graph with a certificate. MSAL signs the assertion with the private
     # key named by the KontAKTCert credential; nothing else here needs crypto.
-    "msal >= 1.31",
+    "msal == 1.37.0",
     # error_screenshot.py grabs the screen with PIL when a run fails.
-    "Pillow == 10.*",
+    "Pillow == 10.4.0",
 ]
 # NOTE: no oomtm, no LibreOffice, no cryptography. This robot moves mail and
 # nothing else: it reads the shared mailbox, hands what it finds to KontAKT, and
